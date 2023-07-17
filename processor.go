@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -159,7 +160,18 @@ func processField(msonTag string, stringified bool, field reflect.Value, parsedD
 			return fmt.Errorf("mson: invalid custom tag %s for type %v", parts[0], field.Type())
 		}
 
-		if !field.IsNil() && field.Elem().IsZero() {
+		value, ok := parsedData[fieldName]
+
+		if !ok {
+			return fmt.Errorf("mson: field %s not found in JSON", fieldName)
+		}
+
+		v := reflect.ValueOf(value)
+
+		if !v.IsZero() {
+			inner := stripPointer(field)
+			inner.Set(v)
+		} else {
 			field.Set(reflect.Zero(field.Type()))
 		}
 	}
@@ -176,20 +188,20 @@ func Unmarshal(data []byte, v any) error {
 		return err
 	}
 
-	fmt.Println(parsedData)
-
 	rv := reflect.ValueOf(v).Elem()
 	rt := rv.Type()
 
 	for i := 0; i < rt.NumField(); i++ {
 		field := rv.Field(i)
+		msonTags := strings.Split(rt.Field(i).Tag.Get("mson"), ";")
 
-		if fieldTag := rt.Field(i).Tag.Get("mson"); fieldTag != "" && field.CanSet() {
+		if len(msonTags) > 0 && field.CanSet() {
+			for _, msonTag := range msonTags {
+				err = processField(msonTag, containsStringOption(rt.Field(i)), field, parsedData, rt.Field(i).Name)
 
-			err = processField(fieldTag, containsStringOption(rt.Field(i)), field, parsedData, rt.Field(i).Name)
-
-			if err != nil {
-				return err
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -198,31 +210,18 @@ func Unmarshal(data []byte, v any) error {
 }
 
 func stripPointer(v reflect.Value) reflect.Value {
-	if v.Kind() != reflect.Ptr && v.Type().Name() != "" && v.CanAddr() {
-		v = v.Addr()
-	}
-
-	for {
-		if v.Kind() == reflect.Interface && !v.IsNil() {
-			e := v.Elem()
-
-			if e.Kind() == reflect.Ptr && !e.IsNil() && e.Elem().Kind() == reflect.Ptr {
-				v = e
-				continue
-			}
+	for v.Kind() == reflect.Ptr && (v.IsNil() || v.Elem().Kind() == reflect.Ptr) {
+		if v.IsNil() {
+			v.Set(reflect.New(v.Type().Elem()))
 		}
 
-		if v.Kind() != reflect.Ptr {
-			break
-		}
+		v = v.Elem()
 	}
 
 	return v
 }
 
 func compareInterfaceValue(value interface{}, arg string) bool {
-	fmt.Println("Type of value: ", reflect.TypeOf(value).String())
-
 	switch v := value.(type) {
 	case bool:
 		return (arg == "true" && v) || (arg == "false" && !v)
@@ -239,7 +238,6 @@ func compareInterfaceValue(value interface{}, arg string) bool {
 
 func containsStringOption(field reflect.StructField) bool {
 	options := splitIgnoreQuoted(field.Tag.Get("json"), ',')
-	fmt.Println(options)
 
 	for _, option := range options {
 		if option == "string" {
