@@ -142,6 +142,14 @@ func processField(msonTag string, stringified bool, field reflect.Value, parsedD
 
 		_, exists := parsedData[fieldName]
 		field.SetBool(exists)
+	case "empty":
+		if field.Type().Kind() != reflect.Ptr {
+			return fmt.Errorf("mson: invalid custom tag %s for type %v", parts[0], field.Type())
+		}
+
+		if !field.IsNil() && field.Elem().IsZero() {
+			field.Set(reflect.Zero(field.Type()))
+		}
 	}
 
 	return nil
@@ -205,20 +213,4 @@ func containsStringOption(field reflect.StructField) bool {
 	}
 
 	return false
-}
-
-type Foo struct {
-	Bar []string `json:"Bar" mson:"nilslice"`
-}
-
-func main() {
-	data := []byte(`{"Bar":null}`)
-	var f Foo
-	err := Unmarshal(data, &f)
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
-
-	fmt.Println("Bar:", f.Bar) // Output: Bar: 5s
 }
