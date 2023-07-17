@@ -16,10 +16,11 @@ func processTag(field reflect.Value, value interface{}, msonTag string, fieldNam
 
 	for _, opt := range splitIgnoreQuoted(msonTag, ';') {
 		parts := splitIgnoreQuoted(opt, ',')
+		var inner reflect.Value
 
 		switch parts[0] {
 		case "duration":
-			field = stripPointer(field)
+			inner = stripPointer(field)
 
 			if field.Type() != reflect.TypeOf(time.Time{}) {
 				return fmt.Errorf("mson: invalid custom tag %s for type %v", parts[0], field.Type())
@@ -42,7 +43,7 @@ func processTag(field reflect.Value, value interface{}, msonTag string, fieldNam
 			field.SetInt(int64(duration))
 			setNewValue(field)
 		case "duration+":
-			field = stripPointer(field)
+			inner = stripPointer(field)
 
 			if field.Type() != reflect.TypeOf(time.Time{}) {
 				return fmt.Errorf("mson: invalid custom tag %s for type %v", parts[0], field.Type())
@@ -65,7 +66,7 @@ func processTag(field reflect.Value, value interface{}, msonTag string, fieldNam
 			field.Set(reflect.ValueOf(time.Now().Add(duration)))
 			setNewValue(field)
 		case "unix":
-			field = stripPointer(field)
+			inner = stripPointer(field)
 
 			if field.Type() != reflect.TypeOf(time.Time{}) {
 				return fmt.Errorf("mson: invalid custom tag %s for type %v", parts[0], field.Type())
@@ -88,7 +89,7 @@ func processTag(field reflect.Value, value interface{}, msonTag string, fieldNam
 			field.Set(reflect.ValueOf(t))
 			setNewValue(field)
 		case "nilslice":
-			field = stripPointer(field)
+			inner = stripPointer(field)
 
 			if field.Type().Kind() != reflect.Slice {
 				return fmt.Errorf("mson: invalid custom tag %s for type %v", parts[0], field.Type())
@@ -99,7 +100,7 @@ func processTag(field reflect.Value, value interface{}, msonTag string, fieldNam
 				setNewValue(field)
 			}
 		case "compare":
-			field = stripPointer(field)
+			inner = stripPointer(field)
 
 			if field.Type() != reflect.TypeOf(true) {
 				return fmt.Errorf("mson: invalid custom tag %s for type %v", parts[0], field.Type())
@@ -119,7 +120,7 @@ func processTag(field reflect.Value, value interface{}, msonTag string, fieldNam
 
 			setNewValue(field)
 		case "contains":
-			field = stripPointer(field)
+			inner = stripPointer(field)
 
 			if field.Type() != reflect.TypeOf(true) {
 				return fmt.Errorf("mson: invalid custom tag %s for type %v", parts[0], field.Type())
@@ -160,7 +161,9 @@ func processTag(field reflect.Value, value interface{}, msonTag string, fieldNam
 				return nil
 			}
 
-			if inner := stripPointer(field); inner.Type().Kind() == v.Type().Kind() {
+			inner = stripPointer(field)
+
+			if inner.Type().Kind() == v.Type().Kind() {
 				inner.Set(v)
 				setNewValue(inner)
 			}
