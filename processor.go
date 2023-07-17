@@ -13,6 +13,8 @@ func processField(msonTag string, stringified bool, field reflect.Value, parsedD
 
 	switch parts[0] {
 	case "duration":
+		field = stripPointer(field)
+
 		if field.Type() != reflect.TypeOf(time.Time{}) {
 			return fmt.Errorf("mson: invalid custom tag %s for type %v", parts[0], field.Type())
 		}
@@ -39,6 +41,8 @@ func processField(msonTag string, stringified bool, field reflect.Value, parsedD
 
 		field.SetInt(int64(duration))
 	case "duration+":
+		field = stripPointer(field)
+
 		if field.Type() != reflect.TypeOf(time.Time{}) {
 			return fmt.Errorf("mson: invalid custom tag %s for type %v", parts[0], field.Type())
 		}
@@ -65,6 +69,8 @@ func processField(msonTag string, stringified bool, field reflect.Value, parsedD
 
 		field.Set(reflect.ValueOf(time.Now().Add(duration)))
 	case "unix":
+		field = stripPointer(field)
+
 		if field.Type() != reflect.TypeOf(time.Time{}) {
 			return fmt.Errorf("mson: invalid custom tag %s for type %v", parts[0], field.Type())
 		}
@@ -91,6 +97,8 @@ func processField(msonTag string, stringified bool, field reflect.Value, parsedD
 
 		field.Set(reflect.ValueOf(t))
 	case "nilslice":
+		field = stripPointer(field)
+
 		if field.Type().Kind() != reflect.Slice {
 			return fmt.Errorf("mson: invalid custom tag %s for type %v", parts[0], field.Type())
 		}
@@ -99,6 +107,8 @@ func processField(msonTag string, stringified bool, field reflect.Value, parsedD
 			field.Set(reflect.MakeSlice(field.Type(), 0, 0))
 		}
 	case "compare":
+		field = stripPointer(field)
+
 		if field.Type() != reflect.TypeOf(true) {
 			return fmt.Errorf("mson: invalid custom tag %s for type %v", parts[0], field.Type())
 		}
@@ -132,6 +142,8 @@ func processField(msonTag string, stringified bool, field reflect.Value, parsedD
 
 		field.Set(reflect.ValueOf(compareInterfaceValue(value, arg)))
 	case "contains":
+		field = stripPointer(field)
+
 		if field.Type() != reflect.TypeOf(true) {
 			return fmt.Errorf("mson: invalid custom tag %s for type %v", parts[0], field.Type())
 		}
@@ -172,7 +184,7 @@ func Unmarshal(data []byte, v any) error {
 	for i := 0; i < rt.NumField(); i++ {
 		field := rv.Field(i)
 
-		if fieldTag := rt.Field(i).Tag.Get("mson"); fieldTag != "" {
+		if fieldTag := rt.Field(i).Tag.Get("mson"); fieldTag != "" && field.CanSet() {
 
 			err = processField(fieldTag, containsStringOption(rt.Field(i)), field, parsedData, rt.Field(i).Name)
 
@@ -183,6 +195,29 @@ func Unmarshal(data []byte, v any) error {
 	}
 
 	return nil
+}
+
+func stripPointer(v reflect.Value) reflect.Value {
+	if v.Kind() != reflect.Ptr && v.Type().Name() != "" && v.CanAddr() {
+		v = v.Addr()
+	}
+
+	for {
+		if v.Kind() == reflect.Interface && !v.IsNil() {
+			e := v.Elem()
+
+			if e.Kind() == reflect.Ptr && !e.IsNil() && e.Elem().Kind() == reflect.Ptr {
+				v = e
+				continue
+			}
+		}
+
+		if v.Kind() != reflect.Ptr {
+			break
+		}
+	}
+
+	return v
 }
 
 func compareInterfaceValue(value interface{}, arg string) bool {
