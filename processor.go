@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -177,13 +178,13 @@ func processField(field reflect.Value, metaData reflect.StructField, data map[st
 
 	var fieldName string
 
-	if jsonTag[0] != "" {
+	if len(jsonTag) > 0 && jsonTag[0] != "" {
 		fieldName = jsonTag[0]
 	} else {
 		fieldName = metaData.Name
 	}
 
-	value, ok := data[fieldName]
+	value, ok := data[strings.ToLower(fieldName)]
 	if !ok {
 		field.Set(reflect.Zero(field.Type()))
 		return nil
@@ -209,6 +210,11 @@ func Unmarshal(data []byte, v any) error {
 
 	if err != nil {
 		return err
+	}
+
+	for k, v := range parsedData {
+		delete(parsedData, k)
+		parsedData[strings.ToLower(k)] = v
 	}
 
 	rv := reflect.ValueOf(v).Elem()
