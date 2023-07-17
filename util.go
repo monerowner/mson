@@ -1,7 +1,9 @@
 package mson
 
 import (
+	"reflect"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -16,14 +18,15 @@ func splitIgnoreQuoted(s string, sep byte) []string {
 			inQuotes = !inQuotes
 		case sep:
 			if !inQuotes {
-				parts = append(parts, s[start:end])
+				parts = append(parts, strings.TrimSpace(s[start:end]))
 				start = i + 1
 			}
 		}
+
 		end = i + 1
 	}
 
-	parts = append(parts, s[start:end])
+	parts = append(parts, strings.TrimSpace(s[start:end]))
 	return parts
 }
 
@@ -74,4 +77,41 @@ func parseTime(value, unit string) (time.Time, error) {
 	default:
 		return time.Unix(int64(unixTime), 0), nil
 	}
+}
+
+func compareInterfaceValue(value interface{}, arg string) bool {
+	switch v := value.(type) {
+	case bool:
+		return (arg == "true" && v) || (arg == "false" && !v)
+	case int:
+		argInt, err := strconv.Atoi(arg)
+		return err == nil && v == argInt
+	case float64:
+		argFloat, err := strconv.ParseFloat(arg, 64)
+		return err == nil && v == argFloat
+	}
+
+	return false
+}
+
+func containsOption(options []string, target string) bool {
+	for _, option := range options {
+		if option == target {
+			return true
+		}
+	}
+
+	return false
+}
+
+func stripPointer(v reflect.Value) reflect.Value {
+	for v.Kind() == reflect.Ptr {
+		if v.IsNil() {
+			v.Set(reflect.New(v.Type().Elem()))
+		}
+
+		v = v.Elem()
+	}
+
+	return v
 }
