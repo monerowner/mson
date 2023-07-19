@@ -9,23 +9,22 @@ import (
 	"time"
 )
 
-func processTag(field reflect.Value, value interface{}, msonTag string, fieldName string) error {
-	setNewValue := func(f reflect.Value) {
-		value = f.Interface()
-	}
+func processTag(field reflect.Value, value interface{}, options []string, fieldName string) error {
+	inner := stripPointer(field)
 
-	for _, opt := range splitIgnoreQuoted(msonTag, ';') {
+	for _, opt := range options {
 		parts := splitIgnoreQuoted(opt, ',')
-		var inner reflect.Value
 
-		switch parts[0] {
+		var modified string
+		var inverted bool
+
+		if len(parts[0]) > 0 && rune(parts[0][len(parts[0])-1]) == '!' {
+			inverted = true
+			modified = parts[0][:len(parts[0])-1]
+		}
+
+		switch modified {
 		case "duration":
-			inner = stripPointer(field)
-
-			if inner.Type() != reflect.TypeOf(time.Time{}) {
-				return fmt.Errorf("mson: invalid custom tag %s for type %v", parts[0], field.Type())
-			}
-
 			var unit string
 
 			if len(parts) > 1 {
@@ -40,38 +39,12 @@ func processTag(field reflect.Value, value interface{}, msonTag string, fieldNam
 				return fmt.Errorf("mson: %w, conversion of field %s to time.Duration failed", err, fieldName)
 			}
 
-			inner.SetInt(int64(duration))
-			setNewValue(inner)
-		case "duration+":
-			inner = stripPointer(field)
-
-			if inner.Type() != reflect.TypeOf(time.Time{}) {
-				return fmt.Errorf("mson: invalid custom tag %s for type %v", parts[0], field.Type())
-			}
-
-			var unit string
-
-			if len(parts) > 1 {
-				unit = parts[1]
+			if inverted {
+				value = time.Now().Add(duration)
 			} else {
-				unit = "seconds"
+				value = int64(duration)
 			}
-
-			duration, err := parseDuration(fmt.Sprint(value), unit)
-
-			if err != nil {
-				return fmt.Errorf("mson: %w, conversion of field %s to time.Time failed", err, fieldName)
-			}
-
-			inner.Set(reflect.ValueOf(time.Now().Add(duration)))
-			setNewValue(inner)
 		case "unix":
-			inner = stripPointer(field)
-
-			if inner.Type() != reflect.TypeOf(time.Time{}) {
-				return fmt.Errorf("mson: invalid custom tag %s for type %v", parts[0], field.Type())
-			}
-
 			var unit string
 
 			if len(parts) > 1 {
@@ -86,26 +59,40 @@ func processTag(field reflect.Value, value interface{}, msonTag string, fieldNam
 				return fmt.Errorf("mson: %w, conversion of field %s to time.Time failed", err, fieldName)
 			}
 
-			inner.Set(reflect.ValueOf(t))
-			setNewValue(inner)
+			value = reflect.ValueOf(t)
 		case "nilslice":
-			inner = stripPointer(field)
+			if value == nil {
+				if !inverted {
+					if inner.Kind() != reflect.Slice {
+						return fmt.Errorf("mson: cannot convert field %s to a new slice; field is of kind %s, not a slice", fieldName, inner.Kind())
+					}
 
-			if inner.Type().Kind() != reflect.Slice {
-				return fmt.Errorf("mson: invalid custom tag %s for type %v", parts[0], field.Type())
+					value = reflect.SliceOf(inner.Type().Elem())
+				}
+			} else if inverted {
+				v := reflect.ValueOf(value)
+
+				if v.Kind() == reflect.Slice && v.Len() == 0 {
+					value = nil
+				}
 			}
+		case "nilmap":
+			if value == nil {
+				if !inverted {
+					if inner.Kind() != reflect.Map {
+						return fmt.Errorf("mson: cannot convert field %s to a new map; field is of kind %s, not a map", fieldName, inner.Kind())
+					}
 
-			if inner.IsNil() {
-				inner.Set(reflect.MakeSlice(inner.Type(), 0, 0))
-				setNewValue(inner)
+					value = reflect.MapOf(inner.Type().Key(), inner.Type().Elem())
+				}
+			} else if inverted {
+				v := reflect.ValueOf(value)
+
+				if v.Kind() == reflect.Map && v.Len() == 0 {
+					value = nil
+				}
 			}
-		case "compare":
-			inner = stripPointer(field)
-
-			if inner.Type() != reflect.TypeOf(true) {
-				return fmt.Errorf("mson: invalid custom tag %s for type %v", parts[0], field.Type())
-			}
-
+		case "equals":
 			if len(parts) > 1 {
 				arg, err := strconv.Unquote(parts[1])
 
@@ -113,97 +100,102 @@ func processTag(field reflect.Value, value interface{}, msonTag string, fieldNam
 					arg = parts[1]
 				}
 
-				inner.SetBool(compareInterfaceValue(value, arg))
+				value = reflect.ValueOf(compareInterfaceValue(value, arg) == (!inverted))
 			} else {
-				inner.SetBool(inner.IsZero())
+				value = reflect.ValueOf(inner.IsZero() == (!inverted))
 			}
-
-			setNewValue(inner)
 		case "contains":
-			inner = stripPointer(field)
-
-			if inner.Type() != reflect.TypeOf(true) {
-				return fmt.Errorf("mson: invalid custom tag %s for type %v", parts[0], field.Type())
-			}
-
-			inner.SetBool(true)
-			setNewValue(inner)
+			// Sets value to true if the field contains the argument, false otherwise
+			// There is no 'contains!' alternative because mson ignores non-existent fields
+			value = true
 		case "empty":
-			if inner.Type().Kind() != reflect.Ptr {
-				return fmt.Errorf("mson: invalid custom tag %s for type %v", parts[0], field.Type())
-			}
-
-			v := reflect.ValueOf(value)
 			var empty bool
 
-			if len(parts) > 1 {
+			if v := reflect.ValueOf(value); len(parts) > 1 {
 				isZero := v.MethodByName(parts[1])
 
-				if !isZero.IsValid() {
-					return fmt.Errorf("mson: invalid function name %s provided as argument to empty", parts[1])
+				if !isZero.IsValid() || isZero.Type().NumIn() > 0 || isZero.Type().NumOut() != 1 || isZero.Type().Out(0) != reflect.TypeOf(true) {
+					panic(fmt.Errorf("mson: invalid function %s provided as argument to empty; function must exist on the type %s, take zero parameters, and return one boolean value", parts[1], v.Type().String()))
 				}
-
-				if isZero.Type().NumIn() > 0 {
-					return fmt.Errorf("mson: invalid function %s provided as argument to empty, must have 0 parameters", parts[1])
-				}
-
-				if isZero.Type().NumOut() != 1 && isZero.Type().Out(0) != reflect.TypeOf(true) {
-					return fmt.Errorf("mson: invalid function %s provided as argument to empty, must return one boolean value", parts[1])
-				}
-
 				empty = isZero.Call(nil)[0].Bool()
 			} else {
 				empty = v.IsZero()
 			}
 
-			if empty {
+			if (empty && !inverted) || (!empty && inverted) {
 				field.Set(reflect.Zero(field.Type()))
 				return nil
 			}
+		case "fromstring":
+			strValue, ok := value.(string)
+			if ok {
+				if inverted {
+					return fmt.Errorf("mson: field %s is already a string", fieldName)
+				}
+				if err := json.Unmarshal([]byte(strValue), &value); err != nil {
+					return fmt.Errorf("%w, unquoting of field %s to %v failed", fmt.Errorf(strings.Replace(err.Error(), "json", "mson", 1)), fieldName, field.Type())
+				}
+			} else {
+				if !inverted {
+					return fmt.Errorf("mson: field %s is not a string", fieldName)
+				}
 
-			inner = stripPointer(field)
-
-			if inner.Type().Kind() == v.Type().Kind() {
-				inner.Set(v)
-				setNewValue(inner)
+				value = fmt.Sprintf("%v", value)
 			}
+		case "add", "subtract", "multiply", "divide":
+			v, err := performArithmeticOperation(value, parts, inverted, fieldName)
+
+			if err != nil {
+				return err
+			}
+
+			value = v
+		case "round", "floor", "ceil":
+			v, err := performNumericalOperation(value, parts, inverted, fieldName)
+
+			if err != nil {
+				return err
+			}
+
+			value = v
+		default:
+			panic(fmt.Errorf("mson: unknown tag option %s", parts[0]))
 		}
 	}
+
+	inner.Set(reflect.ValueOf(value))
 
 	return nil
 }
 
 func processField(field reflect.Value, metaData reflect.StructField, data map[string]interface{}) error {
-	jsonTag := splitIgnoreQuoted(metaData.Tag.Get("json"), ',')
-	if containsOption(jsonTag, "-") {
+	msonTag := splitIgnoreQuoted(metaData.Tag.Get("json"), ',')
+
+	if len(msonTag) == 0 || msonTag[0] == "-" {
 		return nil
 	}
 
-	var fieldName string
+	if msonTag[0] == "_" {
 
-	if len(jsonTag) > 0 && jsonTag[0] != "" {
-		fieldName = jsonTag[0]
-	} else {
+	}
+
+	fieldName := msonTag[0]
+
+	if fieldName == "" {
 		fieldName = metaData.Name
+	} else if fieldName == "_" {
+		fieldName = metaData.Name
+
+		
+
 	}
 
-	value, ok := data[strings.ToLower(fieldName)]
-	if !ok {
-		field.Set(reflect.Zero(field.Type()))
-		return nil
+	if value, ok := data[strings.ToLower(fieldName)]; ok {
+		return processTag(field, value, msonTag[1:], fieldName)
 	}
 
-	if containsOption(jsonTag, "string") {
-		strValue, ok := value.(string)
-		if !ok {
-			return fmt.Errorf("mson: field %s is not a string", fieldName)
-		}
-		if err := json.Unmarshal([]byte(strValue), &value); err != nil {
-			return fmt.Errorf("mson: %w, conversion of field %s to %v failed", err, fieldName, field.Type())
-		}
-	}
-
-	return processTag(field, value, metaData.Tag.Get("mson"), fieldName)
+	field.Set(reflect.Zero(field.Type()))
+	return nil
 }
 
 func Unmarshal(data []byte, v any) error {

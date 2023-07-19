@@ -1,6 +1,8 @@
 package mson
 
 import (
+	"fmt"
+	"math"
 	"reflect"
 	"strconv"
 	"strings"
@@ -114,4 +116,124 @@ func stripPointer(v reflect.Value) reflect.Value {
 	}
 
 	return v
+}
+
+func performArithmeticOperation(value interface{}, parts []string, inverted bool, fieldName string) (interface{}, error) {
+	var op1 func(int64, int64) int64
+	var op2 func(float64, float64) float64
+
+	switch parts[0] {
+	case "add":
+		op1 = func(a, b int64) int64 { return a + b }
+		op2 = func(a, b float64) float64 { return a + b }
+	case "subtract":
+		op1 = func(a, b int64) int64 { return a - b }
+		op2 = func(a, b float64) float64 { return a - b }
+	case "multiply":
+		op1 = func(a, b int64) int64 { return a * b }
+		op2 = func(a, b float64) float64 { return a * b }
+	case "divide":
+		op1 = func(a, b int64) int64 { return a / b }
+		op2 = func(a, b float64) float64 { return a / b }
+	default:
+		panic(fmt.Errorf("mson: unknown numerical operation %s", parts[0]))
+	}
+
+	if len(parts) < 2 {
+		panic(fmt.Errorf("mson: tag option '%s' requires at least one argument", parts[0]))
+	}
+
+	if conv, err := strconv.ParseInt(parts[1], 10, 64); err == nil {
+		switch v := value.(type) {
+		case int:
+			value = op1(int64(v), conv)
+		case float64:
+			value = op2(v, float64(conv))
+		default:
+			return nil, fmt.Errorf("mson: field %s is not a number", fieldName)
+		}
+
+		return value, nil
+	}
+
+	if conv, err := strconv.ParseFloat(parts[1], 64); err == nil {
+		switch v := value.(type) {
+		case int:
+			value = op2(float64(v), conv)
+		case float64:
+			value = op2(v, conv)
+		default:
+			return nil, fmt.Errorf("mson: field %s is not a number", fieldName)
+		}
+
+		return value, nil
+	}
+
+	return nil, fmt.Errorf("mson: tag option '%s' received invalid argument %s", parts[0], parts[1])
+}
+
+func performNumericalOperation(value interface{}, parts []string, inverted bool, fieldName string) (interface{}, error) {
+	var op func(float64) float64
+
+	switch parts[0] {
+	case "round":
+		op = math.Round
+	case "floor":
+		op = math.Floor
+	case "ceil":
+		op = math.Ceil
+	default:
+		panic(fmt.Errorf("mson: unknown numerical operation %s", parts[0]))
+	}
+
+	var places uint8
+
+	if len(parts) > 1 {
+		p, err := strconv.ParseUint(parts[1], 10, 8)
+		if err != nil {
+			return nil, fmt.Errorf("mson: tag option 'round' received invalid argument %s", parts[1])
+		}
+		places = uint8(p)
+	}
+
+	switch v := value.(type) {
+	case float64:
+		if places == 0 {
+			value = int64(op(v))
+		} else if inverted {
+			for i := uint8(0); i < places; i++ {
+				v /= 10
+			}
+			v = op(v)
+			for ; places > 0; places-- {
+				v *= 10
+			}
+		} else {
+			for i := uint8(0); i < places; i++ {
+				v *= 10
+			}
+			v = op(v)
+			for ; places > 0; places-- {
+				v /= 10
+			}
+		}
+
+		value = v
+	case int:
+		if inverted && places > 0 {
+			conv := float64(v)
+			for i := uint8(0); i < places; i++ {
+				conv /= 10
+			}
+			conv = op(conv)
+			for ; places > 0; places-- {
+				conv *= 10
+			}
+			value = conv
+		}
+	default:
+		return nil, fmt.Errorf("mson: field %s is not a number", fieldName)
+	}
+
+	return value, nil
 }
